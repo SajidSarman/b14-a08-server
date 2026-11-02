@@ -46,6 +46,10 @@ app.get('/', (req, res) => {
   res.send({message: 'Server is running fine!'})
 })
 
+app.get('/studios', async (req, res) => {
+  const studios = await studioCollection.find().toArray()
+  res.send(studios)
+})
 
 app.listen(PORT, () => {
   console.log(`Server is running at ${PORT}`)
