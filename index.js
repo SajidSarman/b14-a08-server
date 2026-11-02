@@ -57,6 +57,16 @@ app.get('/studios/:id', async (req, res) => {
   res.send(studio)
 })
 
+app.put('/studios/:id', async (req, res) => {
+  const {id} = req.params
+  const updatedData = req.body
+  const studio = await studioCollection.updateOne(
+    {_id: new ObjectId(id)},
+    {$set: updatedData}
+  )
+  res.json(studio)
+})
+
 app.listen(PORT, () => {
   console.log(`Server is running at ${PORT}`)
 })
