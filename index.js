@@ -51,6 +51,21 @@ app.get('/studios', async (req, res) => {
   res.send(studios)
 })
 
+app.get("/top6studios", async (req, res) => {
+  try {
+    const studios = await studioCollection
+      .find()
+      .sort({ _id: -1 }) // newest first
+      .limit(6)
+      .toArray();
+
+    res.json(studios);
+  } catch (error) {
+    console.error("Failed to fetch featured studios:", error);
+    res.status(500).json({ message: "Failed to fetch featured studios." });
+  }
+});
+
 app.get('/studios/:id', async (req, res) => {
   const {id} = req.params
   const studio = await studioCollection.findOne({_id: new ObjectId(id)})
