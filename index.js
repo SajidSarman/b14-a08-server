@@ -94,18 +94,28 @@ app.delete('/studios/:id', async (req, res) => {
 const bookingCollection = db.collection("bookings");
 
 app.get("/bookings", async (req, res) => {
-  const { customerEmail } = req.query;
+  try {
+    const { customerEmail, hostEmail } = req.query;
 
-  if (typeof customerEmail !== "string" || !customerEmail) {
-    return res.status(400).json({ message: "customerEmail is required." });
+    const email = hostEmail || customerEmail;
+    const field = hostEmail ? "hostEmail" : "customerEmail";
+
+    if (typeof email !== "string" || !email) {
+      return res.status(400).json({
+        message: "Provide customerEmail or hostEmail.",
+      });
+    }
+
+    const bookings = await bookingCollection
+      .find({ [field]: email })
+      .sort({ startAt: 1 })
+      .toArray();
+
+    res.json({ bookings });
+  } catch (error) {
+    console.error("Failed to fetch bookings:", error);
+    res.status(500).json({ message: "Could not load bookings." });
   }
-
-  const bookings = await bookingCollection
-    .find({ customerEmail })
-    .sort({ startAt: 1 })
-    .toArray();
-
-  res.json({ bookings });
 });
 
 app.post("/bookings", async (req, res) => {
@@ -189,31 +199,104 @@ app.post("/bookings", async (req, res) => {
   res.status(201).json({ ...booking, _id: result.insertedId });
 });
 
+
 app.patch("/bookings/:id", async (req, res) => {
-  const { customerEmail } = req.body;
+  try {
+    const { id } = req.params;
+    const { customerEmail, hostEmail, status } = req.body;
 
-  if (!ObjectId.isValid(req.params.id) || typeof customerEmail !== "string") {
-    return res.status(400).json({ message: "Invalid cancellation request." });
-  }
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid booking ID." });
+    }
 
-  const result = await bookingCollection.updateOne(
-    {
-      _id: new ObjectId(req.params.id),
-      customerEmail,
-      status: "Pending",
-    },
-    { $set: { status: "Cancelled" } }
-  );
-
-  if (result.matchedCount === 0) {
-    return res.status(404).json({
-      message: "Pending booking not found; it may already be cancelled or confirmed.",
+    const booking = await bookingCollection.findOne({
+      _id: new ObjectId(id),
     });
+
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found." });
+    }
+
+    // Customer can cancel only their own pending booking.
+    if (status === "Cancelled") {
+      if (customerEmail !== booking.customerEmail) {
+        return res.status(403).json({ message: "Not allowed to cancel this booking." });
+      }
+
+      if (booking.status !== "Pending") {
+        return res.status(409).json({
+          message: "Only pending bookings can be cancelled.",
+        });
+      }
+    } else if (status === "Confirmed" || status === "Completed") {
+      // Verify the host owns the studio.
+      const studioId = ObjectId.isValid(booking.studioId)
+        ? new ObjectId(booking.studioId)
+        : null;
+
+      if (!studioId) {
+        return res.status(400).json({ message: "Invalid studio ID on booking." });
+      }
+
+      const studio = await studioCollection.findOne({ _id: studioId });
+      const ownerEmail = studio?.ownerEmail ?? studio?.hostEmail;
+
+      if (!studio || hostEmail !== ownerEmail) {
+        return res.status(403).json({
+          message: "You are not allowed to update this booking.",
+        });
+      }
+
+      if (status === "Confirmed" && booking.status !== "Pending") {
+        return res.status(409).json({
+          message: "Only pending bookings can be confirmed.",
+        });
+      }
+
+      if (status === "Completed" && booking.status !== "Confirmed") {
+        return res.status(409).json({
+          message: "Only confirmed bookings can be marked completed.",
+        });
+      }
+
+      if (status === "Confirmed") {
+        const conflict = await bookingCollection.findOne({
+          _id: { $ne: booking._id },
+          studioId: booking.studioId,
+          status: "Confirmed",
+          startAt: { $lt: booking.endAt },
+          endAt: { $gt: booking.startAt },
+        });
+
+        if (conflict) {
+          return res.status(409).json({
+            message: "This booking overlaps with another confirmed booking.",
+          });
+        }
+      }
+    } else {
+      return res.status(400).json({
+        message: "Status must be Cancelled, Confirmed, or Completed.",
+      });
+    }
+
+    const result = await bookingCollection.updateOne(
+      { _id: booking._id, status: booking.status },
+      { $set: { status } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(409).json({
+        message: "The booking status changed. Refresh and try again.",
+      });
+    }
+
+    res.json({ message: `Booking marked ${status}.` });
+  } catch (error) {
+    console.error("Failed to update booking:", error);
+    res.status(500).json({ message: "Could not update booking." });
   }
-
-  res.json({ message: "Booking cancelled." });
 });
-
 
 
 app.listen(PORT, () => {
