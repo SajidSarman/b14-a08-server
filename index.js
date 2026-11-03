@@ -67,6 +67,12 @@ app.put('/studios/:id', async (req, res) => {
   res.json(studio)
 })
 
+app.delete('/studios/:id', async (req, res) => {
+  const {id} = req.params
+  const studio = await studioCollection.deleteOne({_id: new ObjectId(id)})
+  res.json(studio)
+})
+
 app.listen(PORT, () => {
   console.log(`Server is running at ${PORT}`)
 })
