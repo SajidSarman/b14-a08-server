@@ -1,13 +1,14 @@
-import express from 'express'
-import { MongoClient, ObjectId } from 'mongodb';
-import cors from 'cors'
-import 'dotenv/config'
+import express from "express";
+import { MongoClient, ObjectId } from "mongodb";
+import cors from "cors";
+import "dotenv/config";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
-const app = express()
-const PORT = 5000
+const app = express();
+const PORT = 5000;
 
-app.use(cors())
-app.use(express.json())
+app.use(cors());
+app.use(express.json());
 
 const client = new MongoClient(process.env.MONGODB_URI);
 
@@ -21,42 +22,68 @@ export async function connectToMongoDB() {
   }
 }
 
-// // Call this only when your application terminates
+// Call this only when your application terminates
 // export async function disconnectFromMongoDB() {
 //   await client.close();
 // }
 
-const mongoClient = await connectToMongoDB()
-const db = mongoClient.db('StudioSpace-B14-A08');
+const mongoClient = await connectToMongoDB();
+const db = mongoClient.db("StudioSpace-B14-A08");
 
-const studioCollection = db.collection('studios');
+const studioCollection = db.collection("studios");
+const bookingCollection = db.collection("bookings");
 
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.CLIENT_URL}/api/auth/jwks`)
+);
 
-app.post('/add-studio', async (req, res) => {
+const verifyToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).send({ msg: "Unauthorized!" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).send({ msg: "Unauthorized!" });
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    // console.log("Decoded JWT payload:", payload);
+    next();
+  } catch (error) {
+    return res.status(500).send({ msg: "Server Error" });
+  }
+};
+
+// Add Studio form -> Next.js POST /api/studios -> POST /add-studio
+app.post("/add-studio", verifyToken, async (req, res) => {
   const studioData = req.body;
   const result = await studioCollection.insertOne(studioData);
-  // console.log("Api called!", studioData)
-  console.log(result)
-  
-  res.send(result)
 
-})
+  console.log(result);
+  res.send(result);
+});
 
-app.get('/', (req, res) => {
-  res.send({message: 'Server is running fine!'})
-})
+app.get("/", (req, res) => {
+  res.send({ message: "Server is running fine!" });
+});
 
-app.get('/studios', async (req, res) => {
-  const studios = await studioCollection.find().toArray()
-  res.send(studios)
-})
+// Public: studio browsing page -> GET /studios
+app.get("/studios", async (req, res) => {
+  const studios = await studioCollection.find().toArray();
+  res.send(studios);
+});
 
-//homepage featured studios
+// Public: homepage Featured Studios -> GET /top6studios
 app.get("/top6studios", async (req, res) => {
   try {
     const studios = await studioCollection
       .find()
-      .sort({ _id: -1 }) // newest first
+      .sort({ _id: -1 })
       .limit(6)
       .toArray();
 
@@ -67,33 +94,36 @@ app.get("/top6studios", async (req, res) => {
   }
 });
 
-app.get('/studios/:id', async (req, res) => {
-  const {id} = req.params
-  const studio = await studioCollection.findOne({_id: new ObjectId(id)})
-  res.send(studio)
-})
+// Public: Studio Details page -> GET /studios/:id
+app.get("/studios/:id", async (req, res) => {
+  const { id } = req.params;
+  const studio = await studioCollection.findOne({ _id: new ObjectId(id) });
+  res.send(studio);
+});
 
-app.put('/studios/:id', async (req, res) => {
-  const {id} = req.params
-  const updatedData = req.body
+// Edit Studio form -> Next.js PUT /api/studios/:id -> PUT /studios/:id
+app.put("/studios/:id", verifyToken, async (req, res) => {
+  const { id } = req.params;
+  const updatedData = req.body;
+
   const studio = await studioCollection.updateOne(
-    {_id: new ObjectId(id)},
-    {$set: updatedData}
-  )
-  res.json(studio)
-})
+    { _id: new ObjectId(id) },
+    { $set: updatedData }
+  );
 
-app.delete('/studios/:id', async (req, res) => {
-  const {id} = req.params
-  const studio = await studioCollection.deleteOne({_id: new ObjectId(id)})
-  res.json(studio)
-})
+  res.json(studio);
+});
 
+// My Listings manager -> Next.js DELETE /api/studios/:id -> DELETE /studios/:id
+app.delete("/studios/:id", verifyToken, async (req, res) => {
+  const { id } = req.params;
+  const studio = await studioCollection.deleteOne({ _id: new ObjectId(id) });
 
+  res.json(studio);
+});
 
-const bookingCollection = db.collection("bookings");
-
-app.get("/bookings", async (req, res) => {
+// My Bookings and Host Bookings pages -> GET /bookings
+app.get("/bookings", verifyToken, async (req, res) => {
   try {
     const { customerEmail, hostEmail } = req.query;
 
@@ -118,7 +148,8 @@ app.get("/bookings", async (req, res) => {
   }
 });
 
-app.post("/bookings", async (req, res) => {
+// Studio Details booking form -> Next.js POST /api/bookings -> POST /bookings
+app.post("/bookings", verifyToken, async (req, res) => {
   const {
     studioId,
     customerEmail,
@@ -140,12 +171,17 @@ app.post("/bookings", async (req, res) => {
     !Number.isInteger(guests) ||
     guests < 1
   ) {
-    return res.status(400).json({ message: "Please provide valid booking details." });
+    return res.status(400).json({
+      message: "Please provide valid booking details.",
+    });
   }
 
   const startAt = new Date(requestedStart);
+
   if (Number.isNaN(startAt.getTime()) || startAt <= new Date()) {
-    return res.status(400).json({ message: "Choose a booking time in the future." });
+    return res.status(400).json({
+      message: "Choose a booking time in the future.",
+    });
   }
 
   const studio = await studioCollection.findOne({
@@ -199,8 +235,9 @@ app.post("/bookings", async (req, res) => {
   res.status(201).json({ ...booking, _id: result.insertedId });
 });
 
-
-app.patch("/bookings/:id", async (req, res) => {
+// My Bookings cancel action and Host Bookings status actions
+// -> Next.js PATCH API routes -> PATCH /bookings/:id
+app.patch("/bookings/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { customerEmail, hostEmail, status } = req.body;
@@ -220,7 +257,9 @@ app.patch("/bookings/:id", async (req, res) => {
     // Customer can cancel only their own pending booking.
     if (status === "Cancelled") {
       if (customerEmail !== booking.customerEmail) {
-        return res.status(403).json({ message: "Not allowed to cancel this booking." });
+        return res.status(403).json({
+          message: "Not allowed to cancel this booking.",
+        });
       }
 
       if (booking.status !== "Pending") {
@@ -235,7 +274,9 @@ app.patch("/bookings/:id", async (req, res) => {
         : null;
 
       if (!studioId) {
-        return res.status(400).json({ message: "Invalid studio ID on booking." });
+        return res.status(400).json({
+          message: "Invalid studio ID on booking.",
+        });
       }
 
       const studio = await studioCollection.findOne({ _id: studioId });
@@ -298,7 +339,6 @@ app.patch("/bookings/:id", async (req, res) => {
   }
 });
 
-
 app.listen(PORT, () => {
-  console.log(`Server is running at ${PORT}`)
-})
+  console.log(`Server is running at ${PORT}`);
+});
